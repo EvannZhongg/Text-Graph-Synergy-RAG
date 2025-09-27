@@ -53,48 +53,46 @@ def chunk_text_semantic(
         text: str,
         file_hash: str,
         target_size: int = 1000,
-        overlap_target: int = 150
+        overlap_target: int = 150,
+        pre_context_limit: int = 50,
+        hard_limit: int = 500
 ) -> List[Dict]:
-    """高级语义分块策略 V2 (现在处理的是已清洗过的文本)"""
+    """
+    高级语义分块策略 V6：最终版，集成了“贪心且不超标”的常规重叠逻辑。
+    """
     if not text:
         return []
 
-    # 图片链接已在预处理中被移除，现在我们只按标题和段落切分
-    # 我们以 ## 或更高级别的标题作为主要分隔符
+    # 1. 结构化拆分 (逻辑不变)
     separators_regex = r'(\n##+\s.*)'
     blocks = re.split(separators_regex, text)
-
     structured_blocks = []
     i = 0
     while i < len(blocks):
         block = blocks[i].strip()
-        if not block:
-            i += 1
-            continue
+        if not block: i += 1; continue
         if re.match(separators_regex, block) and i + 1 < len(blocks):
-            next_block = blocks[i + 1].strip()
-            structured_blocks.append(f"{block}\n\n{next_block}")
+            structured_blocks.append(f"{block}\n\n{blocks[i + 1].strip()}")
             i += 2
         else:
             structured_blocks.append(block)
             i += 1
-
     if not structured_blocks:
-        return [
-            {
-                "chunk_id": f"{file_hash}_0",
-                "text": text,
-                "token_count": _get_token_count(text)
-            }
-        ] if text else []
+        return [{"chunk_id": f"{file_hash}_0", "text": text, "token_count": _get_token_count(text)}] if text else []
 
-    # 后续的贪心算法组合逻辑保持不变
+    # 2. 构建基础块 (逻辑不变)
     base_chunks_of_blocks = []
-    # ... (此部分代码与上一版完全相同，此处省略以保持简洁)
     current_base_chunk = []
     current_tokens = 0
     for block in structured_blocks:
         block_tokens = _get_token_count(block)
+        if block_tokens > target_size:
+            if current_base_chunk:
+                base_chunks_of_blocks.append(current_base_chunk)
+            base_chunks_of_blocks.append([block])
+            current_base_chunk = []
+            current_tokens = 0
+            continue
         if current_tokens + block_tokens > target_size and current_base_chunk:
             base_chunks_of_blocks.append(current_base_chunk)
             current_base_chunk = [block]
@@ -105,36 +103,52 @@ def chunk_text_semantic(
     if current_base_chunk:
         base_chunks_of_blocks.append(current_base_chunk)
 
+    # 3. 为基础块构建最终分块，并应用最终版的重叠逻辑
     final_chunks = []
-    for i, base_chunk_blocks in enumerate(base_chunks_of_blocks):
-        final_chunk_content_blocks = list(base_chunk_blocks)
-        if i + 1 < len(base_chunks_of_blocks):
-            next_base_chunk_blocks = base_chunks_of_blocks[i + 1]
-            overlap_tokens = 0
-            for block_to_add in next_base_chunk_blocks:
-                block_to_add_tokens = _get_token_count(block_to_add)
-                if block_to_add_tokens > overlap_target or (overlap_tokens + block_to_add_tokens) > overlap_target:
-                    final_chunk_content_blocks.append(block_to_add)
-                    break
-                final_chunk_content_blocks.append(block_to_add)
-                overlap_tokens += block_to_add_tokens
+    for i, current_blocks in enumerate(base_chunks_of_blocks):
+        final_chunk_content_blocks = list(current_blocks)
+
+        if i > 0:
+            previous_blocks = base_chunks_of_blocks[i - 1]
+            last_unit_of_prev = previous_blocks[-1]
+            last_unit_tokens = _get_token_count(last_unit_of_prev)
+
+            overlap_blocks_to_prepend = []
+
+            # 规则 1: 硬性上限
+            if last_unit_tokens > hard_limit:
+                pass
+                # 规则 2: 大单元特殊规则
+            elif last_unit_tokens > overlap_target:
+                overlap_blocks_to_prepend.append(last_unit_of_prev)
+                if len(previous_blocks) > 1:
+                    pre_context_unit = previous_blocks[-2]
+                    if _get_token_count(pre_context_unit) <= pre_context_limit:
+                        overlap_blocks_to_prepend.insert(0, pre_context_unit)
+            # --- 核心改动：新的“贪心且不超标”常规重叠逻辑 ---
+            else:
+                current_overlap_tokens = 0
+                for prev_block in reversed(previous_blocks):
+                    prev_block_tokens = _get_token_count(prev_block)
+                    # 检查下一个块加进来是否会“超标”
+                    if current_overlap_tokens + prev_block_tokens > overlap_target:
+                        break  # 如果会超标，则立即停止，不添加这个块
+
+                    overlap_blocks_to_prepend.insert(0, prev_block)
+                    current_overlap_tokens += prev_block_tokens
+
+            final_chunk_content_blocks = overlap_blocks_to_prepend + final_chunk_content_blocks
+
         final_text = "\n\n".join(final_chunk_content_blocks)
         chunk_id = f"{file_hash}_{len(final_chunks)}"
-        final_chunks.append({
-            "chunk_id": chunk_id,
-            "text": final_text,
-            "token_count": _get_token_count(final_text)
-        })
+        final_chunks.append({"chunk_id": chunk_id, "text": final_text, "token_count": _get_token_count(final_text)})
 
     print(f"✅ 'semantic' 策略分块完成，共计 {len(final_chunks)} 个块。")
     return final_chunks
 
 
 def chunk_dispatcher(text: str, file_hash: str, config: Dict) -> List[Dict]:
-    """
-    分块调度器：在分发任务前，先进行统一的文本预处理。
-    """
-    # --- 核心改动：在这里统一调用预处理器 ---
+    """分块调度器 (现在会传递所有语义配置参数)"""
     print("🧹 Preprocessing text to remove image placeholders and links...")
     cleaned_text = _preprocess_text(text)
 
@@ -145,12 +159,13 @@ def chunk_dispatcher(text: str, file_hash: str, config: Dict) -> List[Dict]:
             cleaned_text,
             file_hash,
             target_size=config.get('semantic_target', 1000),
-            overlap_target=config.get('semantic_overlap', 150)
+            overlap_target=config.get('semantic_overlap', 150),
+            pre_context_limit=config.get('semantic_pre_context_limit', 50),
+            hard_limit=config.get('semantic_hard_limit', 500)
         )
     elif strategy == 'fixed':
         return chunk_text_fixed_size(
-            cleaned_text,
-            file_hash,
+            cleaned_text, file_hash,
             chunk_size=config.get('fixed_size', 1000),
             chunk_overlap=config.get('fixed_overlap', 150)
         )
