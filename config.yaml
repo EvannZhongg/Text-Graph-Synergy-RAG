@@ -20,20 +20,20 @@ Chunking:
   semantic_hard_limit: 500 # 如果一个单元本身就超过这个值，则完全放弃为下一个块创建重叠
 
 Embedding:
-  api_key: "sk-25073b1d5af2464292d41bfb04d92a7e"
+  api_key: "sk-******"
   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
   model_name: "text-embedding-v4"
   dimensions: 1024
   max_batch_size: 10
 
 LLM:
-  api_key: "sk-5d982b3ee78f4a4f90e46d18aab0eb4d"
+  api_key: "sk-******"
   base_url: "https://api.deepseek.com"
   model_name: "deepseek-chat"
   max_async: 4
 
 VLM:
-  api_key: "sk-25073b1d5af2464292d41bfb04d92a7e"
+  api_key: "sk-******"
   base_url: "https://qwen-vl.evanzhong.cn/v1"
   model_name: "Qwen/Qwen2.5-VL-7B-Instruct"
   max_async: 1
@@ -65,4 +65,5 @@ Extraction:
     - "Category"
     - "other"
   # 控制是否启用二次修正流程。大于0则启用。
+
   entity_extract_max_gleaning: 1
