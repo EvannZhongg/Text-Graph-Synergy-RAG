@@ -10,7 +10,7 @@ from sklearn.preprocessing import minmax_scale
 import os
 import time
 
-from prompt import ENTITY_EXTRACTION_PROMPT, FINAL_ANSWER_PROMPT
+from prompt import PROMPTS
 
 
 class PathSBERetriever:
@@ -354,7 +354,6 @@ class PathSBERetriever:
         return list(candidate_scores.keys()), final_chunk_scores_list
 
     def generate_answer(self, query: str, top_chunks: list, top_paths: list, mode: str):
-        # ... (此函数不变) ...
         print(f"\n[STAGE 5] Generating final answer with mode: {mode}...")
         paths_context, chunks_context = "", ""
         if mode in ["full_context", "paths_only"]:
@@ -385,7 +384,10 @@ class PathSBERetriever:
                 context_parts = [f"证据 {i + 1} (来源文档: {chunk['source_document']}):\n'''\n{chunk['content']}\n'''"
                                  for i, chunk in enumerate(top_chunks)]
                 chunks_context = "\n\n".join(context_parts)
-        prompt = FINAL_ANSWER_PROMPT.format(query=query, paths_context=paths_context, chunks_context=chunks_context)
+
+        prompt = PROMPTS["final_answer_prompt"].format(query=query, paths_context=paths_context,
+                                                       chunks_context=chunks_context)
+
         try:
             return self.llm_client.chat.completions.create(model=self.llm_model,
                                                            messages=[{"role": "user", "content": prompt}],
@@ -399,7 +401,8 @@ class PathSBERetriever:
         return np.array(response.data[0].embedding).astype('float32')
 
     def _extract_entities_from_query(self, query: str):
-        prompt = ENTITY_EXTRACTION_PROMPT.format(query=query)
+        prompt = PROMPTS["query_entity_extraction_prompt"].format(query=query)
+
         usage = None
         try:
             response = self.llm_client.chat.completions.create(model=self.llm_model,
