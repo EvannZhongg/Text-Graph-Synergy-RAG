@@ -1,5 +1,3 @@
-# BiRAG.py
-
 import sys
 from pathlib import Path
 import hashlib
@@ -26,7 +24,7 @@ def main():
         "embedding_relations": 0
     }
 
-    input_dir = Path("D:/SEU_study/AI4MW/Text-Graph-Synergy-RAG/input10")
+    input_dir = Path("D:/SEU_study/AI4MW/Text-Graph-Synergy-RAG/input14_3")
     output_dir_base = Path("D:/SEU_study/AI4MW/Text-Graph-Synergy-RAG/rag_storage_hotpotqa")
     config_path = Path("config.yaml")
 
@@ -168,5 +166,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
