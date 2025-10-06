@@ -86,6 +86,20 @@ class PathSBERetriever:
         index.add(embeddings)
         return index
 
+    def _get_canonical_path_key(self, path: list) -> frozenset:
+        """为路径生成一个与方向无关的范式键（canonical key）。"""
+        # 如果路径只有一个节点，则直接返回该节点ID
+        if len(path) < 2:
+            return frozenset(path)
+
+        edges = set()
+        for i in range(len(path) - 1):
+            # 将每条边转换为一个frozenset，使得(A, B)和(B, A)等价
+            edge = frozenset([path[i], path[i + 1]])
+            edges.add(edge)
+        # 最终返回所有边的frozenset，使得路径的遍历顺序不影响结果
+        return frozenset(edges)
+
     # <--- 图谱路径发现算法 ---
     def _graph_pathfinding(self, seed_entity_ids: set) -> list:
         if not seed_entity_ids:
@@ -285,20 +299,25 @@ class PathSBERetriever:
         merged_paths = {}
         paths_for_merging = scored_paths + bridged_path_objects
         for p_info in paths_for_merging:
-            canonical_key = tuple(sorted(p_info['path']))
+            # 使用新的辅助函数生成与方向无关的唯一键
+            canonical_key = self._get_canonical_path_key(p_info['path'])
+
+            # 如果这个范式键是第一次出现，直接存入
             if canonical_key not in merged_paths:
                 merged_paths[canonical_key] = p_info
             else:
-                if p_info['reason'] != 'Bridged Path':
-                    merged_paths[canonical_key]['score'] += p_info['score'];
-                    merged_paths[canonical_key]['reason'] += " & Merged"
-                if len(p_info['path']) < len(merged_paths[canonical_key]['path']): merged_paths[canonical_key]['path'] = \
-                p_info['path']
+                # 如果出现了重复路径，比较当前路径与已存路径的分数
+                # 仅保留分数更高的一条
+                if p_info['score'] > merged_paths[canonical_key]['score']:
+                    merged_paths[canonical_key] = p_info
+
         all_scored_paths = list(merged_paths.values())
         print(f"  - Merged paths down to {len(all_scored_paths)} unique paths.")
         diagnostics['time_stage2_fusion'] = f"{time.time() - stage_start_time:.2f}s"
         stage_start_time = time.time()
-        final_ranked_paths = sorted(scored_paths, key=lambda x: x['score'], reverse=True)[:top_k_paths]
+
+        final_ranked_paths = sorted(all_scored_paths, key=lambda x: x['score'], reverse=True)[:top_k_paths]
+
         for p_info in final_ranked_paths:
             canonical_key = tuple(sorted(p_info['path']))
             p_info['endorsing_bridges'] = endorsing_bridges_map.get(canonical_key, [])
