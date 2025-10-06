@@ -63,6 +63,11 @@ async def _process_single_chunk_async(
         print(f"   -> Processing chunk {chunk['chunk_id']}...")
         total_tokens_used = 0
 
+        # --- NEW: Get retry configurations ---
+        max_retries = llm_config.get('max_retries', 0)
+        retry_delay = llm_config.get('retry_delay_seconds', 0)
+        # -----------------------------------
+
         shared_prompt_context = {
             "entity_types": ", ".join(extraction_config.get("entity_types", ["other"])),
             "tuple_delimiter": PROMPTS["DEFAULT_TUPLE_DELIMITER"],
@@ -74,20 +79,29 @@ async def _process_single_chunk_async(
         user_prompt = PROMPTS["entity_extraction_user_prompt"].format(**shared_prompt_context)
 
         history = []
-        try:
-            response = await client.chat.completions.create(
-                model=llm_config['model_name'],
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                temperature=0.1
-            )
-            if response.usage:
-                total_tokens_used += response.usage.total_tokens
-            first_pass_result = response.choices[0].message.content
-            history.append({"role": "user", "content": user_prompt})
-            history.append({"role": "assistant", "content": first_pass_result})
-        except Exception as e:
-            print(f"❌ ERROR on first pass for chunk {chunk['chunk_id']}: {e}")
-            first_pass_result = ""
+        first_pass_result = ""
+        # --- NEW: Retry loop for first pass ---
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.chat.completions.create(
+                    model=llm_config['model_name'],
+                    messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                    temperature=0.1
+                )
+                if response.usage:
+                    total_tokens_used += response.usage.total_tokens
+                first_pass_result = response.choices[0].message.content
+                history.append({"role": "user", "content": user_prompt})
+                history.append({"role": "assistant", "content": first_pass_result})
+                break  # Success, exit the loop
+            except Exception as e:
+                if attempt < max_retries:
+                    print(f"⚠️  Retry {attempt + 1}/{max_retries} on first pass for chunk {chunk['chunk_id']}: {e}")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    print(f"❌ ERROR on first pass for chunk {chunk['chunk_id']} after {max_retries} retries: {e}")
+                    first_pass_result = ""  # Ensure it's empty on final failure
+        # -----------------------------------
 
         entities, relations = _parse_llm_output(first_pass_result, chunk['chunk_id'])
 
@@ -95,21 +109,30 @@ async def _process_single_chunk_async(
             glean_user_prompt = PROMPTS["entity_continue_extraction_user_prompt"].format(**shared_prompt_context)
             history.append({"role": "user", "content": glean_user_prompt})
 
-            try:
-                response = await client.chat.completions.create(
-                    model=llm_config['model_name'],
-                    messages=[{"role": "system", "content": system_prompt}, *history],
-                    temperature=0.1
-                )
-                if response.usage:
-                    total_tokens_used += response.usage.total_tokens
-                second_pass_result = response.choices[0].message.content
-                gleaned_entities, gleaned_relations = _parse_llm_output(second_pass_result, chunk['chunk_id'])
+            # --- NEW: Retry loop for second pass ---
+            for attempt in range(max_retries + 1):
+                try:
+                    response = await client.chat.completions.create(
+                        model=llm_config['model_name'],
+                        messages=[{"role": "system", "content": system_prompt}, *history],
+                        temperature=0.1
+                    )
+                    if response.usage:
+                        total_tokens_used += response.usage.total_tokens
+                    second_pass_result = response.choices[0].message.content
+                    gleaned_entities, gleaned_relations = _parse_llm_output(second_pass_result, chunk['chunk_id'])
 
-                entities.extend(gleaned_entities)
-                relations.extend(gleaned_relations)
-            except Exception as e:
-                print(f"❌ ERROR on second pass for chunk {chunk['chunk_id']}: {e}")
+                    entities.extend(gleaned_entities)
+                    relations.extend(gleaned_relations)
+                    break  # Success, exit the loop
+                except Exception as e:
+                    if attempt < max_retries:
+                        print(
+                            f"⚠️  Retry {attempt + 1}/{max_retries} on second pass for chunk {chunk['chunk_id']}: {e}")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        print(f"❌ ERROR on second pass for chunk {chunk['chunk_id']} after {max_retries} retries: {e}")
+            # -----------------------------------
 
         return {"entities": entities, "relations": relations}, total_tokens_used
 

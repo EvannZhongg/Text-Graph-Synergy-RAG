@@ -1,5 +1,3 @@
-# embedding.py
-
 from typing import List, Dict, Tuple
 from openai import OpenAI
 import time
@@ -17,6 +15,11 @@ def _generate_embeddings_for_texts(texts: List[str], config: Dict, item_type: st
     model_name = config.get('model_name')
     dimensions = config.get('dimensions')
     max_batch_size = config.get('max_batch_size', 25)
+
+    # --- NEW: Get retry configurations ---
+    max_retries = config.get('max_retries', 0)
+    retry_delay = config.get('retry_delay_seconds', 0)
+    # -----------------------------------
 
     total_tokens_used = 0  # <--- NEW: 初始化token计数器
 
@@ -48,24 +51,39 @@ def _generate_embeddings_for_texts(texts: List[str], config: Dict, item_type: st
 
     for i in range(0, len(cleaned_texts), max_batch_size):
         batch_texts = cleaned_texts[i:i + max_batch_size]
-        try:
-            print(f"   - Processing batch {i // max_batch_size + 1}/{-(-len(cleaned_texts) // max_batch_size)}...")
-            response = client.embeddings.create(
-                model=model_name,
-                input=batch_texts,
-                dimensions=dimensions
-            )
-            # <--- NEW: 累加从API返回的token消耗 ---
-            if response.usage:
-                total_tokens_used += response.usage.total_tokens
 
-            batch_embeddings = [embedding.embedding for embedding in response.data]
-            all_embeddings.extend(batch_embeddings)
-            time.sleep(0.1)
+        # --- NEW: Retry loop for each batch ---
+        for attempt in range(max_retries + 1):
+            try:
+                print(
+                    f"   - Processing batch {i // max_batch_size + 1}/{-(-len(cleaned_texts) // max_batch_size)}... (Attempt {attempt + 1})")
+                response = client.embeddings.create(
+                    model=model_name,
+                    input=batch_texts,
+                    dimensions=dimensions
+                )
 
-        except Exception as e:
-            print(f"❌ Error during API call for batch {i // max_batch_size + 1}: {e}")
-            all_embeddings.extend([None] * len(batch_texts))
+                # <--- NEW: 累加从API返回的token消耗 ---
+                if response.usage:
+                    total_tokens_used += response.usage.total_tokens
+
+                batch_embeddings = [embedding.embedding for embedding in response.data]
+                all_embeddings.extend(batch_embeddings)
+                time.sleep(0.1)  # Original delay
+                break  # Success, break the retry loop
+
+            except Exception as e:
+                if attempt < max_retries:
+                    print(
+                        f"⚠️  Retry {attempt + 1}/{max_retries} failed for batch {i // max_batch_size + 1}: {e}. Retrying in {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    print(
+                        f"❌ Error during API call for batch {i // max_batch_size + 1} after {max_retries} retries: {e}. This batch will be skipped.")
+                    # On final failure, fill with None and break the retry loop
+                    all_embeddings.extend([None] * len(batch_texts))
+                    break
+        # -----------------------------------
 
     final_results = [None] * len(texts)
     for i, embedding in enumerate(all_embeddings):

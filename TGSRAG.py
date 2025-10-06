@@ -1,3 +1,5 @@
+# TGSRAG.py
+
 import sys
 from pathlib import Path
 import hashlib
@@ -14,7 +16,7 @@ from fusion import fuse_and_update_knowledge_base
 
 
 def main():
-    print("🚀 Starting BiRAG processing pipeline...")
+    print("🚀 Starting TGSRAG processing pipeline...")
 
     # 初始化总token计数器
     total_token_usage = {
@@ -24,7 +26,7 @@ def main():
         "embedding_relations": 0
     }
 
-    input_dir = Path("D:/SEU_study/AI4MW/Text-Graph-Synergy-RAG/input14_3")
+    input_dir = Path("D:/SEU_study/AI4MW/Text-Graph-Synergy-RAG/input14_4")
     output_dir_base = Path("D:/SEU_study/AI4MW/Text-Graph-Synergy-RAG/rag_storage_hotpotqa")
     config_path = Path("config.yaml")
 
